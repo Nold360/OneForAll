@@ -121,8 +121,8 @@ KEYS = {  # EDIT KEYCODES IN THIS TABLE TO YOUR PREFERENCES:
     BUTTON_B: uinput.BTN_BASE2,  # 'B' button
     BUTTON_X: uinput.BTN_BASE3,  # 'X' button
     BUTTON_Y: uinput.BTN_BASE4,  # 'Y' button
-    BUTTON_L1: uinput.BTN_BASE4,  # 'L1' button
-    BUTTON_R1: uinput.BTN_BASE4,  # 'R1' button
+    BUTTON_L1: uinput.BTN_BASE5,  # 'L1' button
+    BUTTON_R1: uinput.BTN_BASE6,  # 'R1' button
     SELECT: uinput.BTN_SELECT,  # 'Select' button
     START: uinput.BTN_START,  # 'Start' button
     UP: uinput.BTN_NORTH,  # Analog up
@@ -152,8 +152,11 @@ volume = 1
 wifi = 2
 charge = 0
 bat = 100
-last_bat_read = 100;
-joystick = False;
+last_bat_read = 100
+joystick = False
+showOverlay = False
+lowbattery = 0
+overrideCounter = threading.Event()
 
 # TO DO REPLACE A LOT OF OLD CALLS WITH THE CHECK_OUTPUT
 if monitoring_enabled == 'True':
@@ -166,25 +169,42 @@ device = uinput.Device(KEYS.values())
 
 time.sleep(1)
 
-
 def hotkeyAction(key):
     if not gpio.input(HOTKEY):
         if key in HOTKEYS:
+            logging.debug("hotkey action!")
             return True
-
     return False
 
 
 def handle_button(pin):
+    global showOverlay
     key = KEYS[pin]
     time.sleep(BOUNCE_TIME)
     state = 0 if gpio.input(pin) else 1
 
+    if pin == HOTKEY:
+        logging.debug("hotkey pressed")
+        if state == 1:
+            showOverlay = True
+            try: 
+                checkKeyInput()
+            except:
+                pass
+        else:
+            showOverlay = False
+            try: 
+                checkKeyInput()
+            except:
+                pass
+     
     if not hotkeyAction(pin):
         device.emit(key, state)
         time.sleep(BOUNCE_TIME)
+        device.syn()
+    else: 
+        checkKeyInput()
 
-    device.syn()
     logging.debug("Pin: {}, KeyCode: {}, Event: {}".format(pin, key, 'press' if state else 'release'))
 
 
@@ -199,10 +219,13 @@ device.emit(uinput.ABS_Y, VREF / 2);
 
 # Set up OSD service
 try:
-    if RUN_MINIMAL == 'False':
-        osd_proc = Popen([osd_path, bin_dir], shell=False, stdin=PIPE, stdout=None, stderr=None)
+    #FIXME:
+    if joystickConfig['DISABLED'] == 'False':
+        logging.debug("osd nojoystick")
+        osd_proc = Popen([osd_path, bin_dir, "nojoystick"], shell=False, stdin=PIPE, stdout=None, stderr=None)
     else:
-        osd_proc = Popen([osd_path, bin_dir, "ini"], shell=False, stdin=PIPE, stdout=None, stderr=None)
+        logging.debug("osd full")
+        osd_proc = Popen([osd_path, bin_dir, "full"], shell=False, stdin=PIPE, stdout=None, stderr=None)
     osd_in = osd_proc.stdin
     time.sleep(1)
     osd_poll = osd_proc.poll()
@@ -216,12 +239,13 @@ except Exception as e:
 
 # Check for shutdown state
 def checkShdn(volt):
+    global lowbattery
+    global info
     if volt < batt_shdn:
+        lowbattery = 1
+        info = 1
+        overrideCounter.set()
         doShutdown()
-        # state = gpio.input(SHUTDOWN)
-        # if (not state):
-        #     logging.info("SHUTDOWN")
-        #     doShutdown()
 
 
 # Read voltage
@@ -241,7 +265,7 @@ def getVoltagepercent(volt):
 
 
 def readVolumeLevel():
-    process = os.popen("amixer | grep 'Left:' | awk -F'[][]' '{ print $2 }'")
+    process = os.popen("amixer | awk -F'[][]' '/Left:|Mono:/ { print $2 }' | tr -d %")
     res = process.readline()
     process.close()
 
@@ -365,10 +389,10 @@ def doShutdown(channel=None):
 
 
 # Signals the OSD binary
-def updateOSD(volt=0, bat=0, temp=0, wifi=0, audio=0, brightness=0, info=False, charge=False):
+def updateOSD(volt=0, bat=0, temp=0, wifi=0, audio=0, lowbattery=0, info=False, charge=False, bluetooth=False):
     commands = "v" + str(volt) + " b" + str(bat) + " t" + str(temp) + " w" + str(wifi) + " a" + str(
-        audio) + " j" + ("1 " if joystick else "0 ") + " u" + ("1 " if bluetooth else "0 ") + " l" + str(
-        brightness) + " " + ("on " if info else "off ") + ("charge" if charge else "ncharge") + "\n"
+		audio) + " j" + ("1 " if joystick else "0 ") + " u" + ("1 " if bluetooth else "0 ") + " l" + (
+		"1 " if lowbattery else "0 ") + " " + ("on " if info else "off ") + ("charge" if charge else "ncharge") + "\n"
     # print commands
     osd_proc.send_signal(signal.SIGUSR1)
     osd_in.write(commands)
@@ -380,7 +404,8 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-if RUN_MINIMAL == False:
+if RUN_MINIMAL == 'False':
+    logging.debug("no minimal")
     condition = threading.Condition()
 
 
@@ -419,13 +444,16 @@ def checkKeyInput():
     global bat
     global volume
     global volt
+    global showOverlay
+
+    info = showOverlay
+    overrideCounter.set()
 
     # TODO Convert to state
-    while not gpio.input(HOTKEY):
-        info = True
-        condition.acquire()
-        condition.notify()
-        condition.release()
+    if not gpio.input(HOTKEY):
+        #condition.acquire()
+        #condition.notify()
+        #condition.release()
         if not gpio.input(UP):
             volumeUp()
             time.sleep(0.5)
@@ -441,11 +469,6 @@ def checkKeyInput():
         elif not gpio.input(BUTTON_A):
             bluetooth = readModeBluetooth(True)
             time.sleep(0.5)
-
-    if info == True:
-        info = False
-        time.sleep(0.5)
-        updateOSD(volt, bat, 20, wifi, volume, 1, info, charge)
 
 
 def checkJoystickInput():
@@ -475,7 +498,6 @@ def exit_gracefully(signum=None, frame=None):
     osd_proc.terminate()
     sys.exit(0)
 
-
 signal.signal(signal.SIGINT, exit_gracefully)
 signal.signal(signal.SIGTERM, exit_gracefully)
 
@@ -485,7 +507,7 @@ volume = readVolumeLevel()
 wifi = readModeWifi()
 bluetooth = bluetooth = readModeBluetooth()
 
-if RUN_MINIMAL == 'False':
+if RUN_MINIMAL == False:
     inputReadingThread = thread.start_new_thread(inputReading, ())
 
 batteryRead = 0;
@@ -494,7 +516,7 @@ batteryRead = 0;
 try:
     print "One For All Started"
     while 1:
-        if RUN_MINIMAL == False:
+        if RUN_MINIMAL == 'False':
             condition.acquire()
         if not adc == False:
             if batteryRead >= 1:
@@ -503,13 +525,18 @@ try:
                 batteryRead = 0;
         batteryRead = batteryRead + 1;
         # checkShdn(volt)
-        updateOSD(volt, bat, 20, wifi, volume, 1, info, charge)
-
-        if RUN_MINIMAL == False:
-            condition.wait(10)
-            condition.release()
-        else:
-            time.sleep(10)
+        updateOSD(volt, bat, 20, wifi, volume, lowbattery, showOverlay, charge, bluetooth)
+        overrideCounter.wait(10)
+        if overrideCounter.is_set():
+            overrideCounter.clear()
+        runCounter = 0
+	
+	#FIXME
+        #if RUN_MINIMAL == 'False':
+        #    condition.wait(10)
+        #    condition.release()
+        #else:
+        #    time.sleep(10)
             # time.sleep(0.5)
 
 except KeyboardInterrupt:
