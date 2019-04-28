@@ -107,7 +107,7 @@ BUTTONS = [LEFT, RIGHT, DOWN, UP, BUTTON_A, BUTTON_B,
 
 HOTKEYS = [LEFT, RIGHT, DOWN, UP, BUTTON_A]
 
-BOUNCE_TIME = 0.05  # Debounce time in seconds
+BOUNCE_TIME = 0.025  # Debounce time in seconds
 
 # GPIO Init
 gpio.setwarnings(False)
@@ -153,10 +153,13 @@ wifi = 2
 charge = 0
 bat = 100
 last_bat_read = 100
-joystick = False
 showOverlay = False
 lowbattery = 0
 overrideCounter = threading.Event()
+
+joystick = False
+if joystickConfig['ENABLE_ON_BOOT'] == 'True':
+    joystick = True
 
 # TO DO REPLACE A LOT OF OLD CALLS WITH THE CHECK_OUTPUT
 if monitoring_enabled == 'True':
@@ -219,9 +222,7 @@ device.emit(uinput.ABS_Y, VREF / 2);
 
 # Set up OSD service
 try:
-    #FIXME:
-    if joystickConfig['DISABLED'] == 'False':
-        logging.debug("osd nojoystick")
+    if joystickConfig['ENABLED'] == False:
         osd_proc = Popen([osd_path, bin_dir, "nojoystick"], shell=False, stdin=PIPE, stdout=None, stderr=None)
     else:
         logging.debug("osd full")
@@ -265,7 +266,7 @@ def getVoltagepercent(volt):
 
 
 def readVolumeLevel():
-    process = os.popen("amixer | awk -F'[][]' '/Left:|Mono:/ { print $2 }' | tr -d %")
+    process = os.popen("amixer | awk -F'[][]' '/Left:|Mono:/ { print $2 }'")
     res = process.readline()
     process.close()
 
@@ -433,7 +434,7 @@ def inputReading():
         checkKeyInput()
         if joystick == True:
             checkJoystickInput()
-        time.sleep(.05)
+        time.sleep(BOUNCE_TIME)
 
 
 def checkKeyInput():
@@ -479,13 +480,14 @@ def checkJoystickInput():
     logging.debug("Above: {} | Below: {}".format((VREF / 2 + DZONE), (VREF / 2 - DZONE)))
 
     # Check and apply joystick states
-    if (an0 > (VREF / 2 + DZONE)) or (an0 < (VREF / 2 - DZONE)):
+    if ((an0 > (VREF / 2 + DZONE)) or (an0 < (VREF / 2 - DZONE))) and an0 <= VREF:
         val = an0 - 100 - 200 * (an0 < VREF / 2 - DZONE) + 200 * (an0 > VREF / 2 + DZONE)
-        device.emit(uinput.ABS_X, val)
+        device.emit(uinput.ABS_X, val, syn=False)
     else:
         # Center the sticks if within deadzone
-        device.emit(uinput.ABS_X, VREF / 2)
-    if (an1 > (VREF / 2 + DZONE)) or (an1 < (VREF / 2 - DZONE)):
+        device.emit(uinput.ABS_X, VREF / 2, syn=False)
+
+    if ((an1 > (VREF / 2 + DZONE)) or (an1 < (VREF / 2 - DZONE))) and an1 <= VREF:
         valy = an1 + 100 - 200 * (an1 < VREF / 2 - DZONE) + 200 * (an1 > VREF / 2 + DZONE)
         device.emit(uinput.ABS_Y, valy)
     else:
@@ -507,8 +509,8 @@ volume = readVolumeLevel()
 wifi = readModeWifi()
 bluetooth = bluetooth = readModeBluetooth()
 
-if RUN_MINIMAL == False:
-    inputReadingThread = thread.start_new_thread(inputReading, ())
+#if RUN_MINIMAL == 'False':
+inputReadingThread = thread.start_new_thread(inputReading, ())
 
 batteryRead = 0;
 # Main loop
@@ -518,7 +520,7 @@ try:
     while 1:
         if RUN_MINIMAL == 'False':
             condition.acquire()
-        if not adc == False:
+        if adc != False:
             if batteryRead >= 1:
                 volt = readVoltage()
                 bat = getVoltagepercent(volt)
@@ -536,8 +538,8 @@ try:
         #    condition.wait(10)
         #    condition.release()
         #else:
-        #    time.sleep(10)
-            # time.sleep(0.5)
+        #    #time.sleep(10)
+    #    time.sleep(0.5)
 
 except KeyboardInterrupt:
     exit_gracefully()
