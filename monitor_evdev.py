@@ -84,7 +84,7 @@ SELECT = int(keys['SELECT'])
 START = int(keys['START'])
 HOTKEY = int(keys['HOTKEY'])
 
-if config.has_option("GENERAL", "DEBUG"):
+if config.has_option("GENERAL", "DEBUG") and config['GENERAL']['DEBUG'] == 'True':
     logging.basicConfig(filename=bin_dir + '/osd.log', level=logging.DEBUG)
 
 SHUTDOWN = int(general['SHUTDOWN_DETECT'])
@@ -93,8 +93,8 @@ SHUTDOWN = int(general['SHUTDOWN_DETECT'])
 joystickConfig = config['JOYSTICK']
 DZONE = int(joystickConfig['DEADZONE'])  # dead zone applied to joystick (mV)
 VREF = int(joystickConfig['VCC'])  # joystick Vcc (mV)
-JOYSTICK_DISABLED = joystickConfig['DISABLED']
-ON_BY_DEFAULT = joystickConfig['ON_BY_DEFAULT']
+JOYSTICK_ENABLED = joystickConfig['ENABLED']
+ENABLE_ON_BOOT = joystickConfig['ENABLE_ON_BOOT']
 
 # Battery config
 battery = config['BATTERY']
@@ -118,7 +118,7 @@ gpio.setup(BUTTONS, gpio.IN, pull_up_down=gpio.PUD_UP)
 if not SHUTDOWN == -1:
     gpio.setup(SHUTDOWN, gpio.IN, pull_up_down=gpio.PUD_UP)
 
-if JOYSTICK_DISABLED == 'False':
+if JOYSTICK_ENABLED == 'True':
     KEYS = {  # EDIT KEYCODES IN THIS TABLE TO YOUR PREFERENCES:
         # See /usr/include/linux/input.h for keycode names
         BUTTON_A: uinput.BTN_A,  # 'A' button
@@ -179,7 +179,7 @@ showOverlay = False
 lowbattery = 0
 overrideCounter = Event()
 
-if ON_BY_DEFAULT == 'True':
+if ENABLE_ON_BOOT == 'True':
     joystick = True
 
 # TO DO REPLACE A LOT OF OLD CALLS WITH THE CHECK_OUTPUT
@@ -189,7 +189,7 @@ else:
     adc = False
 
 # Create virtual HID for Joystick
-if JOYSTICK_DISABLED == 'False':
+if JOYSTICK_ENABLED == 'True':
     device = uinput.Device(KEYS.values(), name="OneForAll-GP", version=0x3)
 else:
     device = uinput.Device(KEYS.values(), name="OneForAll", version=0x3)
@@ -262,7 +262,7 @@ device.emit(uinput.ABS_Y, VREF / 2);
 
 # Set up OSD service
 try:
-    if JOYSTICK_DISABLED == 'True':
+    if JOYSTICK_ENABLED == 'False':
         osd_proc = Popen([osd_path, bin_dir, "nojoystick"], shell=False, stdin=PIPE, stdout=None, stderr=None)
     else:
         osd_proc = Popen([osd_path, bin_dir, "full"], shell=False, stdin=PIPE, stdout=None, stderr=None)
@@ -308,7 +308,7 @@ def getVoltagepercent(volt):
 
 
 def readVolumeLevel():
-    process = os.popen("amixer | grep 'Left:' | awk -F'[][]' '{ print $2 }'")
+    process = os.popen("amixer | awk -F'[][]' '/Left:|Mono:/ { print $2 }'")
     res = process.readline()
     process.close()
 
@@ -514,13 +514,14 @@ def checkJoystickInput():
     logging.debug("Above: {} | Below: {}".format((VREF / 2 + DZONE), (VREF / 2 - DZONE)))
 
     # Check and apply joystick states
-    if (an0 > (VREF / 2 + DZONE)) or (an0 < (VREF / 2 - DZONE)):
+    if (an0 > ((VREF / 2 + DZONE)) or (an0 < (VREF / 2 - DZONE))) and an0 <= VREF:
         val = an0 - 100 - 200 * (an0 < VREF / 2 - DZONE) + 200 * (an0 > VREF / 2 + DZONE)
-        device.emit(uinput.ABS_X, val)
+        device.emit(uinput.ABS_X, val, syn=False)
     else:
         # Center the sticks if within deadzone
-        device.emit(uinput.ABS_X, VREF / 2)
-    if (an1 > (VREF / 2 + DZONE)) or (an1 < (VREF / 2 - DZONE)):
+        device.emit(uinput.ABS_X, VREF / 2, syn=False)
+
+    if ((an1 > (VREF / 2 + DZONE)) or (an1 < (VREF / 2 - DZONE))) and an1 <= VREF:
         valy = an1 + 100 - 200 * (an1 < VREF / 2 - DZONE) + 200 * (an1 > VREF / 2 + DZONE)
         device.emit(uinput.ABS_Y, valy)
     else:
@@ -543,7 +544,7 @@ volume = readVolumeLevel()
 wifi = readModeWifi()
 bluetooth = bluetooth = readModeBluetooth()
 
-if JOYSTICK_DISABLED == 'False':
+if JOYSTICK_ENABLED == 'True':
     inputReadingThread = thread.start_new_thread(inputReading, ())
 
 try:
